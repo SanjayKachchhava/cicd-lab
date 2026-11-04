@@ -65,21 +65,30 @@ jobs:
       - name: Smoke test
         run: |
           for attempt in {1..20}; do
-            if [ "$(docker inspect -f '{{.State.Running}}' api-smoke)" != "true" ]; then
+            if [ "$(docker inspect -f '{{.State.Running}}' api-smoke 2>/dev/null)" != "true" ]; then
               echo "Container exited unexpectedly"
+              docker logs api-smoke --tail 100
               exit 1
             fi
 
-            if curl -fsS http://127.0.0.1:8000/health \
-              | python -c 'import json,sys; assert json.load(sys.stdin) == {"status": "ok"}'; then
-              echo "Smoke test passed"
-              exit 0
+            if response=$(curl -fsS --max-time 3 \
+              http://127.0.0.1:8000/health 2>/dev/null); then
+
+              if echo "$response" | python -c '
+          import json, sys
+          assert json.load(sys.stdin) == {"status": "ok"}
+          ' 2>/dev/null; then
+                echo "Smoke test passed on attempt $attempt"
+                exit 0
+              fi
             fi
 
+            echo "Attempt $attempt/20: Application not ready"
             sleep 2
           done
 
           echo "Application never became healthy"
+          docker logs api-smoke --tail 100
           exit 1
 
       - name: Show logs and cleanup
