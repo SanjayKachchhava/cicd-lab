@@ -40,3 +40,52 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+  
+  
+  build:
+    name: Docker build and smoke test
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Build Docker image
+        run: docker build -t backend-cicd-lab:ci .
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name api-smoke \
+            -p 127.0.0.1:8000:8000 \
+            backend-cicd-lab:ci
+
+      - name: Smoke test
+        run: |
+          for attempt in {1..20}; do
+            if [ "$(docker inspect -f '{{.State.Running}}' api-smoke)" != "true" ]; then
+              echo "Container exited unexpectedly"
+              exit 1
+            fi
+
+            if curl -fsS http://127.0.0.1:8000/health \
+              | python -c 'import json,sys; assert json.load(sys.stdin) == {"status": "ok"}'; then
+              echo "Smoke test passed"
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "Application never became healthy"
+          exit 1
+
+      - name: Show logs and cleanup
+        if: always()
+        run: |
+          if docker inspect api-smoke >/dev/null 2>&1; then
+            docker logs api-smoke
+            docker rm -f api-smoke
+          fi
