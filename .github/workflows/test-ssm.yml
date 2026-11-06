@@ -1,0 +1,69 @@
+
+name: Verify AWS SSM Connection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  verify-ssm:
+    name: Test GitHub to EC2 Connection
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Show GitHub repository identifiers
+        run: |
+          echo "Owner ID: $GITHUB_REPOSITORY_OWNER_ID"
+          echo "Repository ID: $GITHUB_REPOSITORY_ID"
+          echo "Branch: $GITHUB_REF"
+
+      - name: Authenticate to AWS using OIDC
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.STAGING_DEPLOY_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Execute command on EC2 via SSM
+        env:
+          INSTANCE_ID: ${{ vars.STAGING_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+
+          : "${INSTANCE_ID:?STAGING_INSTANCE_ID is missing}"
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --parameters '{"commands":["set -e","whoami","hostname","uname -m"]}' \
+            --comment "GitHub Actions connection test" \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "Command ID: $COMMAND_ID"
+
+          sleep 3
+
+          if ! aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID"; then
+
+            echo "SSM command failed or timed out"
+
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" || true
+
+            exit 1
+          fi
+
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query '{Status:Status,Output:StandardOutputContent}' \
+            --output json
