@@ -19,6 +19,47 @@ jobs:
           echo "Owner ID: $GITHUB_REPOSITORY_OWNER_ID"
           echo "Repository ID: $GITHUB_REPOSITORY_ID"
           echo "Branch: $GITHUB_REF"
+      
+      - name: Debug GitHub OIDC claims
+        run: |
+          python3 - <<'PY'
+          import os
+          import json
+          import base64
+          import urllib.request
+
+          url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+          separator = "&" if "?" in url else "?"
+
+          request = urllib.request.Request(
+              url + separator + "audience=sts.amazonaws.com",
+              headers={
+                  "Authorization": "Bearer " +
+                  os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+              }
+          )
+
+          with urllib.request.urlopen(request) as response:
+              token = json.load(response)["value"]
+
+          payload = token.split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(
+              base64.urlsafe_b64decode(payload)
+          )
+
+          for field in (
+              "iss",
+              "aud",
+              "sub",
+              "repository",
+              "repository_owner_id",
+              "repository_id",
+              "ref",
+              "environment",
+          ):
+              print(f"{field}: {claims.get(field)}")
+          PY
 
       - name: Authenticate to AWS using OIDC
         uses: aws-actions/configure-aws-credentials@v6.3.0
