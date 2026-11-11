@@ -1,4 +1,5 @@
 """Alembic using an AsyncEngine + asyncpg; sync migration operations are adapted via run_sync."""
+
 import asyncio
 
 from alembic import context

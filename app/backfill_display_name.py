@@ -4,13 +4,18 @@ Run ONLY after `alembic upgrade head`. Full_name remains authoritative, and
 the migration trigger synchronizes old-version writes. Each batch and its
 progress counter commit atomically in their own short transaction.
 """
+
 import argparse
 import asyncio
+import logging
 
-from sqlalchemy import text, pool
+from sqlalchemy import pool, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from app.db_async import database_url
+
+logger = logging.getLogger(__name__)
 
 JOB = "backfill_customer_display_name"
 ADVISORY_LOCK_ID = 2026111401
@@ -33,7 +38,8 @@ RETURNING c.id
 
 async def set_status(conn: AsyncConnection, status: str) -> None:
     async with conn.begin():
-        await conn.execute(text("""
+        await conn.execute(
+            text("""
             INSERT INTO migration_runs(name, status, processed_rows)
             VALUES (:name, :status, 0)
             ON CONFLICT(name) DO UPDATE SET
@@ -41,11 +47,17 @@ async def set_status(conn: AsyncConnection, status: str) -> None:
                 updated_at = now(),
                 completed_at = CASE WHEN EXCLUDED.status = 'completed'
                     THEN now() ELSE NULL END
-        """), {"name": JOB, "status": status})
+        """),
+            {"name": JOB, "status": status},
+        )
 
 
 async def run(batch_size: int, pause_ms: int, max_batches: int | None) -> int:
-    if batch_size <= 0 or pause_ms < 0 or (max_batches is not None and max_batches <= 0):
+    if (
+        batch_size <= 0
+        or pause_ms < 0
+        or (max_batches is not None and max_batches <= 0)
+    ):
         raise ValueError("batch-size > 0, pause-ms >= 0, max-batches > 0")
 
     # One connection for the entire worker; the PostgreSQL session advisory
@@ -59,7 +71,9 @@ async def run(batch_size: int, pause_ms: int, max_batches: int | None) -> int:
                     {"lock_id": ADVISORY_LOCK_ID},
                 )
             if not locked:
-                raise RuntimeError("Another backfill worker already holds the advisory lock")
+                raise RuntimeError(
+                    "Another backfill worker already holds the advisory lock"
+                )
 
             try:
                 await set_status(conn, "running")
@@ -68,15 +82,20 @@ async def run(batch_size: int, pause_ms: int, max_batches: int | None) -> int:
 
                 while True:
                     async with conn.begin():
-                        result = await conn.execute(BATCH_SQL, {"batch_size": batch_size})
+                        result = await conn.execute(
+                            BATCH_SQL, {"batch_size": batch_size}
+                        )
                         changed = len(result.fetchall())
                         if changed:
-                            await conn.execute(text("""
+                            await conn.execute(
+                                text("""
                                 UPDATE migration_runs
                                 SET processed_rows = processed_rows + :changed,
                                     updated_at = now()
                                 WHERE name = :name
-                            """), {"changed": changed, "name": JOB})
+                            """),
+                                {"changed": changed, "name": JOB},
+                            )
 
                     if changed:
                         batches += 1
@@ -93,39 +112,52 @@ async def run(batch_size: int, pause_ms: int, max_batches: int | None) -> int:
                     # A SKIP LOCKED batch may return zero even when rows remain.
                     # Inspect the outstanding work in a separate transaction.
                     async with conn.begin():
-                        remaining = await conn.scalar(text("""
+                        remaining = await conn.scalar(
+                            text("""
                             SELECT EXISTS (
                                 SELECT 1 FROM customers WHERE display_name IS NULL
                             )
-                        """))
+                        """)
+                        )
                         inconsistent = False
                         if not remaining:
-                            inconsistent = await conn.scalar(text("""
+                            inconsistent = await conn.scalar(
+                                text("""
                                 SELECT EXISTS (
                                     SELECT 1 FROM customers
                                     WHERE display_name IS DISTINCT FROM full_name
                                 )
-                            """))
+                            """)
+                            )
 
                         if not remaining and not inconsistent:
-                            await conn.execute(text("""
+                            await conn.execute(
+                                text("""
                                 UPDATE migration_runs
                                 SET status='completed',
                                     updated_at=now(), completed_at=now()
                                 WHERE name=:name
-                            """), {"name": JOB})
+                            """),
+                                {"name": JOB},
+                            )
 
                     if not remaining and not inconsistent:
-                        print("Backfill completed: no NULL or inconsistent display_name rows")
+                        print(
+                            "Backfill completed: no NULL or inconsistent display_name rows"
+                        )
                         return 0
                     if inconsistent:
                         await set_status(conn, "blocked")
-                        raise RuntimeError("Found inconsistent rows; investigate before completion")
+                        raise RuntimeError(
+                            "Found inconsistent rows; investigate before completion"
+                        )
 
                     idle_polls += 1
                     if idle_polls >= 10:
                         await set_status(conn, "blocked")
-                        raise RuntimeError("Unprocessed locked rows remain; retry later")
+                        raise RuntimeError(
+                            "Unprocessed locked rows remain; retry later"
+                        )
                     await asyncio.sleep(1)
             finally:
                 # Session-level locks also release automatically if connection
@@ -137,8 +169,11 @@ async def run(batch_size: int, pause_ms: int, max_batches: int | None) -> int:
                             text("SELECT pg_advisory_unlock(:lock_id)"),
                             {"lock_id": ADVISORY_LOCK_ID},
                         )
-                except Exception:
-                    pass
+                except SQLAlchemyError:
+                    logger.exception(
+                        "Failed to release PostgreSQL advisory lock %s",
+                        ADVISORY_LOCK_ID,
+                    )
     finally:
         await engine.dispose()
 
@@ -147,8 +182,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--batch-size", type=int, default=1000)
     parser.add_argument("--pause-ms", type=int, default=100)
-    parser.add_argument("--max-batches", type=int, default=None,
-                        help="Lab only: stop after N committed batches")
+    parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=None,
+        help="Lab only: stop after N committed batches",
+    )
     args = parser.parse_args()
     return asyncio.run(run(args.batch_size, args.pause_ms, args.max_batches))
 

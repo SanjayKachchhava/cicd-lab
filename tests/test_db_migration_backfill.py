@@ -1,4 +1,5 @@
 """Destructive integration test: only for dedicated, local cicd_lab_test DB."""
+
 import asyncio
 import os
 import subprocess
@@ -48,25 +49,55 @@ def test_legacy_data_resume_and_old_writer_sync():
     # WARNING: this removes the disposable test schema. Never run against real DBs.
     cli("-m", "alembic", "downgrade", "base")
     cli("-m", "alembic", "upgrade", "0001_customers")
-    asyncio.run(execute(
-        "INSERT INTO customers(full_name) "
-        "SELECT 'Customer ' || n FROM generate_series(1, 10) AS n"
-    ))
+    asyncio.run(
+        execute(
+            "INSERT INTO customers(full_name) "
+            "SELECT 'Customer ' || n FROM generate_series(1, 10) AS n"
+        )
+    )
 
     cli("-m", "alembic", "upgrade", "head")
-    assert asyncio.run(scalar("SELECT count(*) FROM customers WHERE display_name IS NULL")) == 10
+    assert (
+        asyncio.run(scalar("SELECT count(*) FROM customers WHERE display_name IS NULL"))
+        == 10
+    )
 
     # Two committed batches, then controlled stop, followed by a fresh process.
-    cli("-m", "app.backfill_display_name", "--batch-size", "3", "--pause-ms", "0", "--max-batches", "2")
-    assert asyncio.run(scalar("SELECT count(*) FROM customers WHERE display_name IS NULL")) == 4
+    cli(
+        "-m",
+        "app.backfill_display_name",
+        "--batch-size",
+        "3",
+        "--pause-ms",
+        "0",
+        "--max-batches",
+        "2",
+    )
+    assert (
+        asyncio.run(scalar("SELECT count(*) FROM customers WHERE display_name IS NULL"))
+        == 4
+    )
     assert asyncio.run(scalar("SELECT status FROM migration_runs")) == "paused"
 
     # Emulate Blue updating the legacy field. DB trigger maintains alignment.
     asyncio.run(execute("UPDATE customers SET full_name='Updated by Blue' WHERE id=1"))
-    assert asyncio.run(scalar("SELECT display_name FROM customers WHERE id=1")) == "Updated by Blue"
+    assert (
+        asyncio.run(scalar("SELECT display_name FROM customers WHERE id=1"))
+        == "Updated by Blue"
+    )
 
     cli("-m", "app.backfill_display_name", "--batch-size", "3", "--pause-ms", "0")
-    assert asyncio.run(scalar("SELECT count(*) FROM customers WHERE display_name IS NULL")) == 0
-    assert asyncio.run(scalar("SELECT count(*) FROM customers WHERE display_name IS DISTINCT FROM full_name")) == 0
+    assert (
+        asyncio.run(scalar("SELECT count(*) FROM customers WHERE display_name IS NULL"))
+        == 0
+    )
+    assert (
+        asyncio.run(
+            scalar(
+                "SELECT count(*) FROM customers WHERE display_name IS DISTINCT FROM full_name"
+            )
+        )
+        == 0
+    )
     assert asyncio.run(scalar("SELECT status FROM migration_runs")) == "completed"
     assert asyncio.run(scalar("SELECT processed_rows FROM migration_runs")) == 10

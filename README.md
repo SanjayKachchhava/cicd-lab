@@ -107,14 +107,14 @@ from sqlalchemy import select
 from app.db_async import make_engine, make_session_factory
 from app.db_models import Customer
 
-engine = make_engine()                        # once per app process
+engine = make_engine()  # once per app process
 SessionLocal = make_session_factory(engine)
+
 
 async def find_customer(customer_id: int):
     async with SessionLocal() as session:
-        return await session.scalar(
-            select(Customer).where(Customer.id == customer_id)
-        )
+        return await session.scalar(select(Customer).where(Customer.id == customer_id))
+
 
 # Dispose engine during FastAPI lifespan shutdown: await engine.dispose()
 ```

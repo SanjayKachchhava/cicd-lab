@@ -1,4 +1,5 @@
 """The intended HEAD schema; Alembic revisions implement its history."""
+
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Identity, Text, text

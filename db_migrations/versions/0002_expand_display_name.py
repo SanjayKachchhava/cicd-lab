@@ -3,8 +3,9 @@
 Revision ID: 0002_expand_display_name
 Revises: 0001_customers
 """
-from alembic import op
+
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0002_expand_display_name"
 down_revision = "0001_customers"
@@ -18,9 +19,21 @@ def upgrade() -> None:
         "migration_runs",
         sa.Column("name", sa.Text(), primary_key=True),
         sa.Column("status", sa.Text(), nullable=False),
-        sa.Column("processed_rows", sa.BigInteger(), nullable=False, server_default="0"),
-        sa.Column("started_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "processed_rows", sa.BigInteger(), nullable=False, server_default="0"
+        ),
+        sa.Column(
+            "started_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
     )
     # Blue (old code) writes full_name; this trigger keeps display_name synced.
